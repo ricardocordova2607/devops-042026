@@ -1,0 +1,110 @@
+---
+- hosts: web
+  become: true
+  gather_facts: true
+
+  vars:
+    app_user: www-data
+
+  tasks:
+    - name: Instalação de pacotes webserver
+      apt:
+        pkg:
+          - php8.2
+          - php-pear
+          - php8.2-curl
+          - php8.2-gd
+          - php8.2-intl
+          - php8.2-xmlrpc
+          - php8.2-mysql
+          - apache2
+          - python3-mysqldb
+          - wget
+          - zip
+          - curl
+          - vim
+        state: present
+        update_cache: yes
+      when: ansible_os_family == 'Debian'
+
+    - name: Criar diretório do webserver
+      file:
+        path: /srv/www
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0775'
+
+    - name: Download e extração da aplicação
+      unarchive:
+        src: http://forceclass-00.linuxforce.com.br/express/express.zip
+        dest: /srv/www
+        remote_src: yes
+
+    - name: Ajustar permissões da aplicação
+      file:
+        path: /srv/www/express
+        owner: www-data
+        group: www-data
+        recurse: yes
+
+    - name: Substituir IP do banco
+      replace:
+        path: /srv/www/express/backup.php
+        regexp: '192\.168\.1\.20'
+        replace: '172.17.177.102'
+
+    - name: Criar VirtualHost
+      copy:
+        dest: /etc/apache2/sites-available/express.conf
+        content: |
+          <VirtualHost *:80>
+              ServerAdmin webmaster@asf.com
+              ServerName express.asf.com
+              DocumentRoot /srv/www/express
+
+              ErrorLog ${APACHE_LOG_DIR}/asf-error.log
+              CustomLog ${APACHE_LOG_DIR}/asf-access.log combined
+          </VirtualHost>
+      notify: Reload Apache
+
+    - name: Configuração de diretório Apache
+      copy:
+        dest: /etc/apache2/conf-available/direxpress.conf
+        content: |
+          <Directory /srv/www>
+              Options Indexes FollowSymLinks
+              AllowOverride All
+              Require all granted
+          </Directory>
+      notify: Reload Apache
+
+    - name: Desabilitar site default
+      command: a2dissite 000-default.conf
+      args:
+        removes: /etc/apache2/sites-enabled/000-default.conf
+      notify: Reload Apache
+
+    - name: Habilitar conf Apache
+      command: a2enconf direxpress.conf
+      args:
+        creates: /etc/apache2/conf-enabled/direxpress.conf
+      notify: Reload Apache
+
+    - name: Habilitar site Apache
+      command: a2ensite express.conf
+      args:
+        creates: /etc/apache2/sites-enabled/express.conf
+      notify: Reload Apache
+
+    - name: Definir ServerName global
+      lineinfile:
+        path: /etc/apache2/apache2.conf
+        line: "ServerName express.asf.com"
+      notify: Reload Apache
+
+  handlers:
+    - name: Reload Apache
+      service:
+        name: apache2
+        state: reloaded
